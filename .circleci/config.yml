@@ -1,0 +1,283 @@
+# Release-only pipeline for the Sumigoe GitHub release repo.
+#
+# Triggered by the Tangled tag workflow via CircleCI API v3 with:
+#   { "tag": "vX.Y.Z", "sha": "<tangled commit>" }
+#
+# Required project environment variables:
+#   TANGLED_CLONE_URL = https://tangled.org/did:plc:tbfeuv4fpbqfthcu7a227s4x
+#   GH_TOKEN          = fine-grained PAT with Contents: Read and write
+#
+# No source is checked out from this repo; every build job clones Tangled.
+
+version: 2.1
+
+orbs:
+  gh: circleci/github-cli@3.0.0
+
+parameters:
+  tag:
+    type: string
+    default: ""
+  sha:
+    type: string
+    default: ""
+
+jobs:
+  build-linux:
+    docker:
+      - image: cimg/rust:1.99.0
+    steps:
+      - run:
+          name: Validate release parameters
+          command: |
+            set -euo pipefail
+            printf '%s' '<< pipeline.parameters.tag >>' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'
+            printf '%s' '<< pipeline.parameters.sha >>' | grep -Eq '^[0-9a-f]{40,64}$'
+      - run:
+          name: Install system dependencies
+          command: |
+            set -euo pipefail
+            sudo apt-get update
+            sudo apt-get install -y \
+              build-essential pkg-config curl wget file lld git \
+              libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+              libjavascriptcoregtk-4.1-dev libxdo-dev libssl-dev \
+              libayatana-appindicator3-dev librsvg2-dev \
+              libpipewire-0.3-dev libspa-0.2-dev libasound2-dev \
+              libclang-dev patchelf
+            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+      - run:
+          name: Clone Tangled
+          command: |
+            set -euo pipefail
+            git clone --filter=blob:none "$TANGLED_CLONE_URL" src
+            cd src
+            git fetch --depth 1 origin '<< pipeline.parameters.sha >>'
+            git checkout FETCH_HEAD
+      - run:
+          name: Fetch models and install npm dependencies
+          command: |
+            set -euo pipefail
+            cd src
+            curl -fL --retry 3 -o assets/tracker.onnx \
+              https://public-oss.sbeam.dev/sumigoe-models/tracker.onnx
+            curl -fL --retry 3 -o assets/crepe-medium.onnx \
+              https://public-oss.sbeam.dev/sumigoe-models/crepe-medium.onnx
+            echo "bc64d589080ec05132a8a524d4548a2266dc9ed1881250d2a0fb2ec7147f537a  assets/tracker.onnx" | sha256sum -c -
+            echo "f7f6f78022f9e6d51506554393bcd88d4f9ae787e060a8f4aafeb2019f0fb939  assets/crepe-medium.onnx" | sha256sum -c -
+            npm ci
+      - run:
+          name: Install dx
+          command: |
+            set -euo pipefail
+            curl -L --proto '=https' --tlsv1.2 -sSf \
+              https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+            cargo binstall -y dioxus-cli@0.7.10
+      - run:
+          name: Bundle Linux
+          command: |
+            set -euo pipefail
+            cd src
+            dx bundle --release --linux \
+              --no-default-features --features linux \
+              --package-types deb --package-types appimage \
+              --out-dir ../dist/linux
+      - persist_to_workspace:
+          root: .
+          paths: [dist/linux]
+
+  build-macos:
+    macos:
+      xcode: 27.1.0
+    resource_class: m4pro.medium
+    steps:
+      - run:
+          name: Select Node 22
+          command: |
+            nvm install 22
+            nvm alias default 22
+      - run:
+          name: Install Rust
+          command: |
+            if ! command -v rustup >/dev/null 2>&1; then
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --default-toolchain 1.99.0
+            fi
+            rustup toolchain install 1.99.0 --profile minimal
+            rustup default 1.99.0
+            echo 'source "$HOME/.cargo/env"' >> "$BASH_ENV"
+      - run:
+          name: Clone Tangled
+          command: |
+            set -euo pipefail
+            git clone --filter=blob:none "$TANGLED_CLONE_URL" src
+            cd src
+            git fetch --depth 1 origin '<< pipeline.parameters.sha >>'
+            git checkout FETCH_HEAD
+      - run:
+          name: Fetch models and install npm dependencies
+          command: |
+            set -euo pipefail
+            cd src
+            curl -fL --retry 3 -o assets/tracker.onnx \
+              https://public-oss.sbeam.dev/sumigoe-models/tracker.onnx
+            curl -fL --retry 3 -o assets/crepe-medium.onnx \
+              https://public-oss.sbeam.dev/sumigoe-models/crepe-medium.onnx
+            echo "bc64d589080ec05132a8a524d4548a2266dc9ed1881250d2a0fb2ec7147f537a  assets/tracker.onnx" | sha256sum -c -
+            echo "f7f6f78022f9e6d51506554393bcd88d4f9ae787e060a8f4aafeb2019f0fb939  assets/crepe-medium.onnx" | sha256sum -c -
+            npm ci
+      - run:
+          name: Install dx
+          command: |
+            set -euo pipefail
+            curl -L --proto '=https' --tlsv1.2 -sSf \
+              https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+            cargo binstall -y dioxus-cli@0.7.10
+      - run:
+          name: Bundle macOS
+          command: |
+            set -euo pipefail
+            cd src
+            dx bundle --release --macos \
+              --no-default-features --features macos \
+              --package-types macos --package-types dmg \
+              --out-dir ../dist/macos
+      - persist_to_workspace:
+          root: .
+          paths: [dist/macos]
+
+  build-windows:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+    steps:
+      - run:
+          name: Validate release parameters
+          command: |
+            if ('<< pipeline.parameters.tag >>' -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$') {
+              throw 'invalid release tag'
+            }
+            if ('<< pipeline.parameters.sha >>' -notmatch '^[0-9a-f]{40,64}$') {
+              throw 'invalid release sha'
+            }
+      - run:
+          name: Install Rust
+          command: |
+            Invoke-WebRequest -Uri https://win.rustup.rs -OutFile rustup-init.exe
+            .\rustup-init.exe -y --default-toolchain 1.99.0
+            $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+      - run:
+          name: Ensure Node.js
+          command: |
+            if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+              choco install nodejs-lts -y
+              $env:Path = "C:\Program Files\nodejs;$env:Path"
+            }
+      - run:
+          name: Clone Tangled
+          command: |
+            $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+            git clone $env:TANGLED_CLONE_URL src
+            Set-Location src
+            git fetch --depth 1 origin '<< pipeline.parameters.sha >>'
+            git checkout FETCH_HEAD
+      - run:
+          name: Fetch models and install npm dependencies
+          command: |
+            Set-Location src
+            curl.exe -fL --retry 3 -o assets/tracker.onnx https://public-oss.sbeam.dev/sumigoe-models/tracker.onnx
+            curl.exe -fL --retry 3 -o assets/crepe-medium.onnx https://public-oss.sbeam.dev/sumigoe-models/crepe-medium.onnx
+            npm ci
+      - run:
+          name: Install dx
+          command: |
+            $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.ps1'))
+            cargo binstall -y dioxus-cli@0.7.10
+      - run:
+          name: Bundle Windows
+          command: |
+            $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+            Set-Location src
+            dx bundle --release --windows `
+              --no-default-features --features windows `
+              --package-types msi --package-types nsis `
+              --out-dir ..\dist\windows
+      - persist_to_workspace:
+          root: .
+          paths: [dist/windows]
+
+  publish:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - attach_workspace:
+          at: .
+      - gh/install
+      - run:
+          name: Generate release notes and checksums
+          command: |
+            set -euo pipefail
+            TAG='<< pipeline.parameters.tag >>'
+            SHA='<< pipeline.parameters.sha >>'
+
+            printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'
+            printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40,64}$'
+
+            git clone "$TANGLED_CLONE_URL" src
+            cd src
+            git fetch --tags --force --depth 200 origin
+
+            PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+            {
+              echo "Tangled tag: https://tangled.org/did:plc:tbfeuv4fpbqfthcu7a227s4x/tags/$TAG"
+              echo "Tangled commit: https://tangled.org/did:plc:tbfeuv4fpbqfthcu7a227s4x/commit/$SHA"
+              echo
+              if [ -n "$PREV" ]; then
+                git log --pretty=format:'- %s' "$PREV..$TAG"
+              else
+                git log --pretty=format:'- %s' "$TAG"
+              fi
+            } > ../notes.md
+
+            cd ..
+            (cd dist && find . -type f \
+              \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
+              -print0 | sort -z | xargs -0 sha256sum | sed -E 's#  \./[^/]+/#  #') > dist/SHA256SUMS
+      - run:
+          name: Publish GitHub release
+          command: |
+            set -euo pipefail
+            TAG='<< pipeline.parameters.tag >>'
+            export GH_TOKEN
+
+            mapfile -t files < <(find dist -type f \
+              \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name 'SHA256SUMS' \) | sort)
+
+            test "${#files[@]}" -gt 0
+
+            if gh release view "$TAG" --repo sbeam-dev/sumigoe >/dev/null 2>&1; then
+              gh release upload "$TAG" "${files[@]}" --repo sbeam-dev/sumigoe --clobber
+              gh release edit "$TAG" --repo sbeam-dev/sumigoe --notes-file notes.md
+            else
+              gh release create "$TAG" "${files[@]}" \
+                --repo sbeam-dev/sumigoe \
+                --title "Sumigoe $TAG" \
+                --notes-file notes.md \
+                --target main
+            fi
+
+workflows:
+  release:
+    jobs:
+      - build-linux
+      - build-macos
+      - build-windows
+      - publish:
+          requires:
+            - build-linux
+            - build-macos
+            - build-windows
