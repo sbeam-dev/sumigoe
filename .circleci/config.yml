@@ -243,15 +243,15 @@ jobs:
             cd src
             git fetch --tags --force --depth 200 origin
 
-            PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+            PREV=$(git describe --tags --abbrev=0 "${SHA}^" 2>/dev/null || true)
             {
               echo "Tangled tag: https://tangled.org/did:plc:tbfeuv4fpbqfthcu7a227s4x/tags/$TAG"
               echo "Tangled commit: https://tangled.org/did:plc:tbfeuv4fpbqfthcu7a227s4x/commit/$SHA"
               echo
               if [ -n "$PREV" ]; then
-                git log --pretty=format:'- %s' "$PREV..$TAG"
+                git log --pretty=format:'- %s' "$PREV..$SHA"
               else
-                git log --pretty=format:'- %s' "$TAG"
+                git log --pretty=format:'- %s' "$SHA"
               fi
             } > ../notes.md
 
