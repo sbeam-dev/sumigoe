@@ -104,6 +104,9 @@ jobs:
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
                 | sh -s -- -y --default-toolchain 1.99.0
             fi
+            if [ -f "$HOME/.cargo/env" ]; then
+              source "$HOME/.cargo/env"
+            fi
             rustup toolchain install 1.99.0 --profile minimal
             rustup default 1.99.0
             echo 'source "$HOME/.cargo/env"' >> "$BASH_ENV"
