@@ -257,6 +257,7 @@ jobs:
 
             cd ..
             (cd dist && find . -type f \
+              ! -name 'default._*' ! -name '._*' \
               \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
               -print0 | sort -z | xargs -0 sha256sum | sed -E 's#  \./[^/]+/#  #') > dist/SHA256SUMS
       - run:
@@ -267,6 +268,7 @@ jobs:
             export GH_TOKEN
 
             mapfile -t files < <(find dist -type f \
+              ! -name 'default._*' ! -name '._*' \
               \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name 'SHA256SUMS' \) | sort)
 
             test "${#files[@]}" -gt 0
