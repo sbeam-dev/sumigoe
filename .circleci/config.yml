@@ -73,7 +73,7 @@ jobs:
               https://public-oss.sbeam.dev/sumigoe-models/tracker.onnx
             curl -fL --retry 3 -o assets/crepe-medium.onnx \
               https://public-oss.sbeam.dev/sumigoe-models/crepe-medium.onnx
-            echo "bc64d589080ec05132a8a524d4548a2266dc9ed1881250d2a0fb2ec7147f537a  assets/tracker.onnx" | sha256sum -c -
+            echo "b5ba0a06ad8e91fd5d73a3e38ef637c7b84808e08f575f7f1a5c57d20083c263  assets/tracker.onnx" | sha256sum -c -
             echo "f7f6f78022f9e6d51506554393bcd88d4f9ae787e060a8f4aafeb2019f0fb939  assets/crepe-medium.onnx" | sha256sum -c -
             npm ci
       - run:
@@ -136,7 +136,7 @@ jobs:
               https://public-oss.sbeam.dev/sumigoe-models/tracker.onnx
             curl -fL --retry 3 -o assets/crepe-medium.onnx \
               https://public-oss.sbeam.dev/sumigoe-models/crepe-medium.onnx
-            echo "bc64d589080ec05132a8a524d4548a2266dc9ed1881250d2a0fb2ec7147f537a  assets/tracker.onnx" | sha256sum -c -
+            echo "b5ba0a06ad8e91fd5d73a3e38ef637c7b84808e08f575f7f1a5c57d20083c263  assets/tracker.onnx" | sha256sum -c -
             echo "f7f6f78022f9e6d51506554393bcd88d4f9ae787e060a8f4aafeb2019f0fb939  assets/crepe-medium.onnx" | sha256sum -c -
             npm ci
       - run:
@@ -224,6 +224,16 @@ jobs:
             Set-Location src
             curl.exe -fL --retry 3 -o assets/tracker.onnx https://public-oss.sbeam.dev/sumigoe-models/tracker.onnx
             curl.exe -fL --retry 3 -o assets/crepe-medium.onnx https://public-oss.sbeam.dev/sumigoe-models/crepe-medium.onnx
+
+            $tracker = (Get-FileHash assets/tracker.onnx -Algorithm SHA256).Hash.ToLower()
+            if ($tracker -ne 'b5ba0a06ad8e91fd5d73a3e38ef637c7b84808e08f575f7f1a5c57d20083c263') {
+              throw "tracker.onnx checksum mismatch: $tracker"
+            }
+            $crepe = (Get-FileHash assets/crepe-medium.onnx -Algorithm SHA256).Hash.ToLower()
+            if ($crepe -ne 'f7f6f78022f9e6d51506554393bcd88d4f9ae787e060a8f4aafeb2019f0fb939') {
+              throw "crepe-medium.onnx checksum mismatch: $crepe"
+            }
+
             npm ci
       - run:
           name: Install dx
