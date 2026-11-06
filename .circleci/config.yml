@@ -151,10 +151,33 @@ jobs:
           command: |
             set -euo pipefail
             cd src
+
+            bash scripts/gen-macos-plist.sh
+
             dx bundle --release --macos \
               --no-default-features --features macos \
-              --package-types macos --package-types dmg \
+              --package-types macos \
               --out-dir ../dist/macos
+
+            APP=$(find ../dist/macos -maxdepth 1 -name '*.app' -print -quit)
+            test -n "$APP"
+
+            /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$APP/Contents/Info.plist"
+            codesign --verify --deep --verbose=2 "$APP"
+
+            VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)
+            test -n "$VERSION"
+
+            STAGE=$(mktemp -d)
+            ditto "$APP" "$STAGE/$(basename "$APP")"
+            ln -s /Applications "$STAGE/Applications"
+
+            hdiutil create \
+              -volname "Sumigoe" \
+              -srcfolder "$STAGE" \
+              -ov \
+              -format UDZO \
+              "../dist/macos/Sumigoe_${VERSION}_aarch64.dmg"
       - persist_to_workspace:
           root: .
           paths: [dist/macos]
