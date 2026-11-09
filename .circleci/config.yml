@@ -390,19 +390,31 @@ jobs:
             VERSION='<< pipeline.parameters.tag >>'
             VERSION="${VERSION#v}"
             VERSION="${VERSION%%[-+]*}"
-            grep -q "versionName='${VERSION}'" /tmp/badging.txt
-            grep -q "package: name='dev.sbeam.sumigoe'" /tmp/badging.txt
-            grep -q "uses-permission: name='android.permission.RECORD_AUDIO'" /tmp/badging.txt
+            actual_version="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" /tmp/badging.txt)"
+            echo "versionName: APK reports '${actual_version}', tag expects '${VERSION}'"
+            if [ "$actual_version" != "$VERSION" ]; then
+              echo "error: versionName mismatch. Bump version in Cargo.toml (and Cargo.lock)" >&2
+              echo "error: before tagging, then move the tag to the new commit." >&2
+              exit 1
+            fi
+            grep -q "package: name='dev.sbeam.sumigoe'" /tmp/badging.txt ||
+              { echo "error: unexpected applicationId in the APK" >&2; exit 1; }
+            grep -q "uses-permission: name='android.permission.RECORD_AUDIO'" /tmp/badging.txt ||
+              { echo "error: RECORD_AUDIO missing from the APK manifest" >&2; exit 1; }
 
             # Single ABI only: dx never cleans jniLibs, so a stale target/ tree
             # could silently add another ABI and break installs.
             # Write the listing first: `unzip -l | grep -q` dies with SIGPIPE
             # (exit 141) under pipefail when grep exits on the first match.
             unzip -l "$apk" > /tmp/apk-list.txt
-            grep -q 'lib/arm64-v8a/libmain\.so' /tmp/apk-list.txt
-            grep -q 'lib/arm64-v8a/libonnxruntime\.so' /tmp/apk-list.txt
-            ! grep -qE 'lib/(armeabi-v7a|x86|x86_64)/' /tmp/apk-list.txt
-            grep -q 'assets/tracker-.*\.onnx' /tmp/apk-list.txt
+            grep -q 'lib/arm64-v8a/libmain\.so' /tmp/apk-list.txt ||
+              { echo "error: arm64-v8a libmain.so missing from the APK" >&2; exit 1; }
+            grep -q 'lib/arm64-v8a/libonnxruntime\.so' /tmp/apk-list.txt ||
+              { echo "error: libonnxruntime.so missing; did scripts/fetch-ort-android.sh run before dx?" >&2; exit 1; }
+            ! grep -qE 'lib/(armeabi-v7a|x86|x86_64)/' /tmp/apk-list.txt ||
+              { echo "error: extra ABI packaged (dx did not clean jniLibs?)" >&2; exit 1; }
+            grep -q 'assets/tracker-.*\.onnx' /tmp/apk-list.txt ||
+              { echo "error: tracker.onnx missing from the APK assets" >&2; exit 1; }
 
             "$apksigner" verify --print-certs "$apk"
       - persist_to_workspace:
