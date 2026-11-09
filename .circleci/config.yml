@@ -346,6 +346,8 @@ jobs:
               https://public-oss.sbeam.dev/sumigoe-models/crepe-medium.onnx
             echo "b5ba0a06ad8e91fd5d73a3e38ef637c7b84808e08f575f7f1a5c57d20083c263  assets/tracker.onnx" | sha256sum -c -
             echo "f7f6f78022f9e6d51506554393bcd88d4f9ae787e060a8f4aafeb2019f0fb939  assets/crepe-medium.onnx" | sha256sum -c -
+            # Official ONNX Runtime Android .so (pinned AAR, lean packaging).
+            scripts/fetch-ort-android.sh --abi arm64-v8a
       - run:
           name: Install dx
           command: |
@@ -398,7 +400,8 @@ jobs:
             # (exit 141) under pipefail when grep exits on the first match.
             unzip -l "$apk" > /tmp/apk-list.txt
             grep -q 'lib/arm64-v8a/libmain\.so' /tmp/apk-list.txt
-            ! grep -q 'lib/x86_64/' /tmp/apk-list.txt
+            grep -q 'lib/arm64-v8a/libonnxruntime\.so' /tmp/apk-list.txt
+            ! grep -qE 'lib/(armeabi-v7a|x86|x86_64)/' /tmp/apk-list.txt
             grep -q 'assets/tracker-.*\.onnx' /tmp/apk-list.txt
 
             "$apksigner" verify --print-certs "$apk"
