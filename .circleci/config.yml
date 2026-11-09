@@ -7,6 +7,12 @@
 #   TANGLED_CLONE_URL = https://tangled.org/did:plc:tbfeuv4fpbqfthcu7a227s4x
 #   GH_TOKEN          = fine-grained PAT with Contents: Read and write
 #
+# Android release signing (project variables, all masked):
+#   ANDROID_KEYSTORE_BASE64    = base64 of the release .jks
+#   ANDROID_KEYSTORE_PASSWORD  = keystore password
+#   ANDROID_KEY_ALIAS          = key alias inside the keystore
+#   ANDROID_KEY_PASSWORD       = key password (PKCS12: same as the store password)
+#
 # No source is checked out from this repo; every build job clones Tangled.
 
 version: 2.1
@@ -255,6 +261,148 @@ jobs:
           root: .
           paths: [dist/windows]
 
+  build-android:
+    docker:
+      # SDK, build-tools and JDK are preinstalled; -ndk adds the NDK. No emulator
+      # is needed, so the Docker executor is enough (no nested virtualization).
+      - image: cimg/android:2026.10.1-ndk
+    resource_class: large
+    environment:
+      # Android only: statically link libc++ into libmain.so. dx never packages
+      # libc++_shared.so, so the shared default would crash at startup.
+      ORT_CXX_STDLIB: c++_static
+      # AGP's JdkImageTransform parses `jlink --version`; JVM cgroup warnings on
+      # stdout break it.
+      JAVA_TOOL_OPTIONS: "-Xlog:os+container=off"
+    steps:
+      - run:
+          name: Validate release parameters
+          command: |
+            set -euo pipefail
+            printf '%s' '<< pipeline.parameters.tag >>' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'
+            printf '%s' '<< pipeline.parameters.sha >>' | grep -Eq '^[0-9a-f]{40,64}$'
+      - run:
+          name: Resolve Android SDK paths
+          command: |
+            set -euo pipefail
+            if [ -z "${ANDROID_HOME:-}" ]; then
+              for candidate in /opt/android/sdk "$HOME/android-sdk"; do
+                if [ -d "$candidate" ]; then ANDROID_HOME="$candidate"; break; fi
+              done
+            fi
+            test -n "${ANDROID_HOME:-}" || { echo "no Android SDK found" >&2; exit 1; }
+            export ANDROID_HOME ANDROID_SDK_ROOT="$ANDROID_HOME"
+            echo "export ANDROID_HOME=$ANDROID_HOME" >> "$BASH_ENV"
+            echo "export ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$BASH_ENV"
+
+            if [ -z "${ANDROID_NDK_HOME:-}" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+              ndk="$(ls -1 "$ANDROID_HOME/ndk" | sort -V | tail -n1)"
+              if [ -n "$ndk" ]; then
+                echo "export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$BASH_ENV"
+              fi
+            fi
+
+            # dx generates compileSdk/targetSdk 34 with AGP 8.7; make sure the
+            # SDK packages exist instead of discovering it mid-build.
+            missing=()
+            [ -d "$ANDROID_HOME/platforms/android-34" ] || missing+=("platforms;android-34")
+            ls -d "$ANDROID_HOME"/build-tools/34.* >/dev/null 2>&1 || missing+=("build-tools;34.0.0")
+            if [ "${#missing[@]}" -gt 0 ]; then
+              echo "installing: ${missing[*]}"
+              yes | sdkmanager --licenses >/dev/null 2>&1 || true
+              sdkmanager "${missing[@]}"
+            fi
+
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-unset}"
+            echo "JAVA_HOME=${JAVA_HOME:-unset}"
+            java -version
+            ls -1 "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" "$ANDROID_HOME/ndk" 2>/dev/null || true
+      - run:
+          name: Install Rust and the Android target
+          command: |
+            set -euo pipefail
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --default-toolchain 1.99.0
+            source "$HOME/.cargo/env"
+            echo 'source "$HOME/.cargo/env"' >> "$BASH_ENV"
+            rustup target add aarch64-linux-android
+      - run:
+          name: Clone Tangled
+          command: |
+            set -euo pipefail
+            git clone --filter=blob:none "$TANGLED_CLONE_URL" src
+            cd src
+            git fetch --depth 1 origin '<< pipeline.parameters.sha >>'
+            git checkout FETCH_HEAD
+      - run:
+          name: Fetch models
+          command: |
+            set -euo pipefail
+            cd src
+            curl -fL --retry 3 -o assets/tracker.onnx \
+              https://public-oss.sbeam.dev/sumigoe-models/tracker.onnx
+            curl -fL --retry 3 -o assets/crepe-medium.onnx \
+              https://public-oss.sbeam.dev/sumigoe-models/crepe-medium.onnx
+            echo "b5ba0a06ad8e91fd5d73a3e38ef637c7b84808e08f575f7f1a5c57d20083c263  assets/tracker.onnx" | sha256sum -c -
+            echo "f7f6f78022f9e6d51506554393bcd88d4f9ae787e060a8f4aafeb2019f0fb939  assets/crepe-medium.onnx" | sha256sum -c -
+      - run:
+          name: Install dx
+          command: |
+            set -euo pipefail
+            curl -L --proto '=https' --tlsv1.2 -sSf \
+              https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+            cargo binstall -y dioxus-cli@0.7.10
+      - run:
+          name: Configure release signing
+          command: |
+            set -euo pipefail
+            cd src
+            scripts/ci/android-signing.sh
+      - run:
+          name: Bundle Android
+          # The Rust release build is quiet while linking.
+          no_output_timeout: 30m
+          command: |
+            set -euo pipefail
+            cd src
+            scripts/build-android.sh --release \
+              --target aarch64-linux-android \
+              --dist ../dist/android
+      - run:
+          name: Verify APK
+          command: |
+            set -euo pipefail
+            apk="$(find dist/android -name '*.apk' -print -quit)"
+            test -n "$apk"
+
+            aapt2="$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort -V | tail -n1)"
+            apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n1)"
+            test -n "$aapt2"
+            test -n "$apksigner"
+
+            "$aapt2" dump badging "$apk" > /tmp/badging.txt
+            cat /tmp/badging.txt
+
+            # versionName comes from Cargo.toml; ignore a -test/-rc tag suffix.
+            VERSION='<< pipeline.parameters.tag >>'
+            VERSION="${VERSION#v}"
+            VERSION="${VERSION%%[-+]*}"
+            grep -q "versionName='${VERSION}'" /tmp/badging.txt
+            grep -q "package: name='dev.sbeam.sumigoe'" /tmp/badging.txt
+            grep -q "uses-permission: name='android.permission.RECORD_AUDIO'" /tmp/badging.txt
+
+            # Single ABI only: dx never cleans jniLibs, so a stale target/ tree
+            # could silently add another ABI and break installs.
+            unzip -l "$apk" | grep -q 'lib/arm64-v8a/libmain\.so'
+            ! unzip -l "$apk" | grep -q 'lib/x86_64/'
+            unzip -l "$apk" | grep -q 'assets/tracker-.*\.onnx'
+
+            "$apksigner" verify --print-certs "$apk"
+      - persist_to_workspace:
+          root: .
+          paths: [dist/android]
+
   publish:
     docker:
       - image: cimg/base:stable
@@ -291,7 +439,7 @@ jobs:
             cd ..
             (cd dist && find . -type f \
               ! -name 'default._*' ! -name '._*' \
-              \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
+              \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.apk' \) \
               -print0 | sort -z | xargs -0 sha256sum | sed -E 's#  \./[^/]+/#  #') > dist/SHA256SUMS
       - run:
           name: Publish GitHub release
@@ -302,7 +450,7 @@ jobs:
 
             mapfile -t files < <(find dist -type f \
               ! -name 'default._*' ! -name '._*' \
-              \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name 'SHA256SUMS' \) | sort)
+              \( -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.apk' -o -name 'SHA256SUMS' \) | sort)
 
             test "${#files[@]}" -gt 0
 
@@ -323,8 +471,10 @@ workflows:
       - build-linux
       - build-macos
       - build-windows
+      - build-android
       - publish:
           requires:
             - build-linux
             - build-macos
             - build-windows
+            - build-android
