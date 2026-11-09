@@ -394,9 +394,12 @@ jobs:
 
             # Single ABI only: dx never cleans jniLibs, so a stale target/ tree
             # could silently add another ABI and break installs.
-            unzip -l "$apk" | grep -q 'lib/arm64-v8a/libmain\.so'
-            ! unzip -l "$apk" | grep -q 'lib/x86_64/'
-            unzip -l "$apk" | grep -q 'assets/tracker-.*\.onnx'
+            # Write the listing first: `unzip -l | grep -q` dies with SIGPIPE
+            # (exit 141) under pipefail when grep exits on the first match.
+            unzip -l "$apk" > /tmp/apk-list.txt
+            grep -q 'lib/arm64-v8a/libmain\.so' /tmp/apk-list.txt
+            ! grep -q 'lib/x86_64/' /tmp/apk-list.txt
+            grep -q 'assets/tracker-.*\.onnx' /tmp/apk-list.txt
 
             "$apksigner" verify --print-certs "$apk"
       - persist_to_workspace:
